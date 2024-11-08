@@ -48,11 +48,13 @@ typedef struct {
 } NN;
 
 NN nn_alloc(size_t *arch, size_t arch_count);
+void nn_zero(NN nn);
 void nn_print(NN nn, const char *name);
 void nn_randomize(NN nn, float low, float high);
 void nn_forward(NN nn);
 float nn_cost(NN nn, Matrix tin, Matrix tout);
 void nn_finite_diff(NN nn, NN g, float eps, Matrix tin, Matrix tout);
+void nn_backprop(NN nn, NN g, Matrix tin, Matrix tout);
 void nn_learn(NN nn, NN g, float rate);
 
 #define NEURALNETWORK_PRINT(nn) nn_print(nn, #nn)
@@ -427,6 +429,98 @@ void nn_finite_diff(NN nn, NN g, float eps, Matrix tin, Matrix tout) {
         }
     }
 }
+
+/**
+ * Sets all weights, biases, and activations of the neural network to zero.
+ *
+ * This function iterates through each layer of the neural network, setting
+ * all elements of the weight matrices, bias matrices, and activation matrices
+ * to zero. This effectively resets the state of the network.
+ *
+ * @param nn The neural network whose weights, biases, and activations are to be zeroed.
+ */
+void nn_zero(NN nn) {
+    for (size_t i = 0; i < nn.count; i++) {
+        matrix_fill(nn.ws[i], 0);
+        matrix_fill(nn.bs[i], 0);
+        matrix_fill(nn.as[i], 0);
+    }
+    matrix_fill(nn.as[nn.count], 0);
+}
+
+
+/**
+ * Computes the gradient of the cost function with respect to the weights and biases of the neural network.
+ *
+ * This function performs a backward pass through the neural network, computing the gradients of the cost
+ * function with respect to each of the weights and biases of the network. The gradients are stored in the
+ * `g` parameter, which is a neural network with the same architecture as `nn`. The gradients of the cost
+ * function with respect to the weights and biases are computed using the chain rule and the product rule of
+ * differentiation.
+ *
+ * @param nn The neural network whose cost function is to be differentiated.
+ * @param g The neural network that will store the gradients of the cost function.
+ * @param tin The input training data.
+ * @param tout The output training data.
+ * 
+ * @pre tin.rows == tout.rows
+ * @pre tout.cols == NEURALNETWORK_OUTPUT(nn).cols
+ */
+void nn_backprop(NN nn, NN g, Matrix tin, Matrix tout) {
+    MLIGHT_ASSERT(tin.rows == tout.rows);  
+    MLIGHT_ASSERT(tout.cols == NEURALNETWORK_OUTPUT(nn).cols);
+    size_t rows = tin.rows;
+
+    nn_zero(g);
+
+    // i - current sample
+    // j - previous activation
+    // l - current layer
+    // k - current activation
+
+    for (size_t i = 0; i < rows; i++) {
+        matrix_copy(NEURALNETWORK_INPUT(nn), matrix_row(tin, i));
+        nn_forward(nn);
+
+        for (size_t j = 0; j <= nn.count; ++j) {
+            matrix_fill(g.as[j], 0);
+        }
+
+        for(size_t j = 0; j < tout.cols; j++) {
+            MATRIX_AT(NEURALNETWORK_OUTPUT(g), 0, j) = MATRIX_AT(NEURALNETWORK_OUTPUT(nn), 0, j) - MATRIX_AT(tout, i, j);
+        }
+
+        for(size_t l = nn.count; l > 0; l--) {
+            for(size_t j = 0; j < nn.as[l].cols; j++) {
+                float a = MATRIX_AT(nn.as[l], 0, j);
+                float da = MATRIX_AT(g.as[l], 0, j);
+                MATRIX_AT(g.bs[l - 1], 0, j) += 2*da*a*(1-a);
+                for (size_t k = 0; k < nn.as[l - 1].cols; k++) {
+                    // j weigth matrix col
+                    // k weight matrix row
+                    float pa = MATRIX_AT(nn.as[l - 1], 0, k);
+                    float w = MATRIX_AT(nn.ws[l - 1], k, j);
+                    MATRIX_AT(g.ws[l - 1], k, j) += 2*da*a*(1-a) * pa;
+                    MATRIX_AT(g.as[l - 1], 0, k) += 2*da*a*(1-a) * w;
+                }
+            }
+        }
+    }
+
+    for(size_t i = 0; i < g.count; i++) {
+        for(size_t j = 0; j < g.ws[i].rows; j++) {
+            for(size_t k = 0; k < g.ws[i].cols; k++) {
+                MATRIX_AT(g.ws[i], j, k) /= rows;
+            }
+        }
+        for(size_t j = 0; j < g.bs[i].rows; j++) {
+            for(size_t k = 0; k < g.bs[i].cols; k++) {
+                MATRIX_AT(g.bs[i], j, k) /= rows;
+            }
+        }
+    }
+}
+
 
 /**
  * Updates the weights and biases of the neural network using the computed gradients.
